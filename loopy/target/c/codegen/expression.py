@@ -49,7 +49,8 @@ from loopy.types import LoopyType
 # {{{ Loopy expression to C expression mapper
 
 class ExpressionToCExpressionMapper(IdentityMapper):
-    def __init__(self, codegen_state, fortran_abi=False, type_inf_mapper=None):
+    def __init__(self, codegen_state, fortran_abi=False, type_inf_mapper=None,
+                 use_c99_native_complex=False):
         self.kernel = codegen_state.kernel
         self.codegen_state = codegen_state
 
@@ -59,6 +60,10 @@ class ExpressionToCExpressionMapper(IdentityMapper):
         self.type_inf_mapper = type_inf_mapper
 
         self.allow_complex = codegen_state.allow_complex
+        if(use_c99_native_complex and not self.allow_complex):
+            raise ValueError("C99 native complex enabled with allow_complex"
+                             " disabled")
+        self.use_c99_native_complex = use_c99_native_complex
 
         self.fortran_abi = fortran_abi
 
@@ -92,11 +97,13 @@ class ExpressionToCExpressionMapper(IdentityMapper):
         return ary
 
     def wrap_in_typecast(self, actual_type, needed_dtype, s):
-        if (actual_type.is_complex() and needed_dtype.is_complex()
-                and actual_type != needed_dtype):
-            return var("%s_cast" % self.complex_type_name(needed_dtype))(s)
-        elif not actual_type.is_complex() and needed_dtype.is_complex():
-            return var("%s_fromreal" % self.complex_type_name(needed_dtype))(s)
+        if not self.use_c99_native_complex \
+                and actual_type != needed_dtype \
+                and needed_dtype.is_complex():
+            if actual_type.is_complex():
+                return var("%s_cast" % self.complex_type_name(needed_dtype))(s)
+            else:
+                return var("%s_fromreal" % self.complex_type_name(needed_dtype))(s)
         else:
             return s
 
@@ -385,16 +392,25 @@ class ExpressionToCExpressionMapper(IdentityMapper):
             try:
                 dtype = expr.dtype
             except AttributeError:
-                # (COMPLEX_GUESS_LOGIC) This made it through type 'guessing' in
-                # type inference, and it was concluded there (search for
-                # COMPLEX_GUESS_LOGIC in loopy.type_inference), that no
-                # accuracy was lost by using single precision.
-                cast_type = "cfloat"
+                # (COMPLEX_GUESS_LOGIC)
+                # This made it through type 'guessing' above, and it
+                # was concluded above (search for COMPLEX_GUESS_LOGIC),
+                # that nothing was lost by using single precision.
+                if self.use_c99_native_complex:
+                    cast_type = "float _Complex"
+                else:
+                    cast_type = "cfloat"
             else:
                 if dtype == np.complex128:
-                    cast_type = "cdouble"
+                    if self.use_c99_native_complex:
+                        cast_type = "double _Complex"
+                    else:
+                        cast_type = "cdouble"
                 elif dtype == np.complex64:
-                    cast_type = "cfloat"
+                    if self.use_c99_native_complex:
+                        cast_type = "float _Complex"
+                    else:
+                        cast_type = "cfloat"
                 else:
                     raise RuntimeError("unsupported complex type in expression "
                             "generation: %s" % type(expr))
@@ -517,8 +533,12 @@ class ExpressionToCExpressionMapper(IdentityMapper):
             raise LoopyError("'%s' is not a complex type" % dtype)
 
         if dtype.dtype == np.complex64:
+            if self.use_c99_native_complex:
+                return "float _Complex"
             return "cfloat"
         if dtype.dtype == np.complex128:
+            if self.use_c99_native_complex:
+                return "double _Complex"
             return "cdouble"
         else:
             raise RuntimeError
@@ -540,7 +560,7 @@ class ExpressionToCExpressionMapper(IdentityMapper):
         tgt_dtype = self.infer_type(expr)
         is_complex = tgt_dtype.is_complex()
 
-        if not is_complex:
+        if not is_complex or self.use_c99_native_complex:
             return base_impl(expr, type_context)
         else:
             tgt_name = self.complex_type_name(tgt_dtype)
@@ -589,7 +609,7 @@ class ExpressionToCExpressionMapper(IdentityMapper):
         tgt_dtype = self.infer_type(expr)
         is_complex = tgt_dtype.is_complex()
 
-        if not is_complex:
+        if not is_complex or self.use_c99_native_complex:
             return base_impl(expr, type_context)
         else:
             tgt_name = self.complex_type_name(tgt_dtype)
@@ -644,7 +664,7 @@ class ExpressionToCExpressionMapper(IdentityMapper):
         n_dtype = self.infer_type(expr.numerator).numpy_dtype
         d_dtype = self.infer_type(expr.denominator).numpy_dtype
 
-        if not self.allow_complex:
+        if not self.allow_complex or self.use_c99_native_complex:
             return base_impl(expr, type_context)
 
         n_complex = 'c' == n_dtype.kind
@@ -682,7 +702,7 @@ class ExpressionToCExpressionMapper(IdentityMapper):
                     self.rec(expr.base, type_context),
                     self.rec(expr.exponent, type_context))
 
-        if not self.allow_complex:
+        if not self.allow_complex or self.use_c99_native_complex:
             return base_impl(expr, type_context)
 
         tgt_dtype = self.infer_type(expr)

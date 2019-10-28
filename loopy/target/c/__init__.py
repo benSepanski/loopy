@@ -64,7 +64,6 @@ class DTypeRegistryWrapper(object):
     def dtype_to_ctype(self, dtype):
         from loopy.types import LoopyType, NumpyType, OpaqueType
         assert isinstance(dtype, LoopyType)
-
         if isinstance(dtype, NumpyType):
             return self.wrapped_registry.dtype_to_ctype(dtype)
         elif isinstance(dtype, OpaqueType):
@@ -370,6 +369,23 @@ class CTarget(TargetBase):
     # }}}
 
 
+class CComplexTarget(CTarget):
+    def get_device_ast_builder(self):
+        return CComplexASTBuilder(self)
+
+    @memoize_method
+    def get_dtype_registry(self):
+        from loopy.target.c.compyte.dtypes import (
+                DTypeRegistry, fill_registry_with_c_types)
+        result = DTypeRegistry()
+        fill_registry_with_c_types(result, respect_windows=False,
+                include_bool=True)
+        result.get_or_register_dtype("float _Complex", np.complex64)
+        result.get_or_register_dtype("double _Complex", np.complex128)
+
+        return DTypeRegistryWrapper(result)
+
+
 # {{{ executable c target
 
 class ExecutableCTarget(CTarget):
@@ -431,13 +447,19 @@ class CMathCallable(ScalarCallable):
             name = "f" + name
 
         # unary functions
-        if name in ["fabs", "acos", "asin", "atan", "cos", "cosh", "sin", "sinh",
-                    "tan", "tanh", "exp", "log", "log10", "sqrt", "ceil", "floor",
-                    "erf", "erfc"]:
+        if name in ["fabs", "acos", "asin", "atan", "conj", "cos", "cosh", "sin",
+                    "sinh", "tan", "tanh", "exp", "log", "log10", "sqrt", "ceil",
+                    "floor", "erf", "erfc"]:
 
             for id in arg_id_to_dtype:
                 if not -1 <= id <= 0:
                     raise LoopyError("%s can take only one argument." % name)
+
+            if name == "conj" and not isinstance(caller_kernel.target,
+                                                 CComplexTarget):
+                raise LoopyError("Only a CComplexTarget can scope 'conj'"
+                                 " as a c function, a %s cannot"
+                                 % type(caller_kernel.target))
 
             if 0 not in arg_id_to_dtype or arg_id_to_dtype[0] is None:
                 # the types provided aren't mature enough to specialize the
@@ -453,16 +475,24 @@ class CMathCallable(ScalarCallable):
                 # ints and unsigned casted to float32
                 dtype = np.float32
             elif dtype.kind == 'c':
-                raise LoopyTypeError("%s does not support type %s" % (name, dtype))
+                if not isinstance(caller_kernel.target, CComplexTarget) \
+                        or name in ["ceil", "floor"]:
+                    raise LoopyTypeError("%s does not support type %s"
+                                         % (name, dtype))
+                else:
+                    if name == "fabs":
+                        name = "cabsf"
+                    elif name != "conj":
+                        name = "c" + name
 
             from loopy.target.opencl import OpenCLTarget
             if not isinstance(caller_kernel.target, OpenCLTarget):
                 # for CUDA, C Targets the name must be modified
-                if dtype == np.float64:
+                if dtype in [np.float64, np.complex128]:
                     pass  # fabs
-                elif dtype == np.float32:
+                elif dtype in [np.float32, np.complex64]:
                     name = name + "f"  # fminf
-                elif dtype == np.float128:  # pylint:disable=no-member
+                elif dtype in [np.float128, np.complex256]:  # noqa pylint:disable=no-member
                     name = name + "l"  # fminl
                 else:
                     raise LoopyTypeError("%s does not support type %s" % (name,
@@ -494,16 +524,20 @@ class CMathCallable(ScalarCallable):
                      if id >= 0])
 
             if dtype.kind == "c":
-                raise LoopyTypeError("%s does not support complex numbers")
+                if not isinstance(caller_kernel.target, CComplexTarget) \
+                        or name in ["fmin", "fmax"]:
+                    raise LoopyTypeError("%s does not support complex numbers")
+                else:
+                    name = "c" + name
 
             elif dtype.kind == "f":
                 from loopy.target.opencl import OpenCLTarget
                 if not isinstance(caller_kernel.target, OpenCLTarget):
-                    if dtype == np.float64:
+                    if dtype in [np.float64, np.complex128]:
                         pass  # fmin
-                    elif dtype == np.float32:
+                    elif dtype in [np.float32, np.complex64]:
                         name = name + "f"  # fminf
-                    elif dtype == np.float128:  # pylint:disable=no-member
+                    elif dtype in [np.float128, np.complex256]:  # noqa pylint:disable=no-member
                         name = name + "l"  # fminl
                     else:
                         raise LoopyTypeError("%s does not support type %s"
@@ -524,7 +558,7 @@ def scope_c_math_functions(target, identifier):
     Returns an instance of :class:`InKernelCallable` if the function
     represented by :arg:`identifier` is known in C, otherwise returns *None*.
     """
-    if identifier in ["abs", "acos", "asin", "atan", "cos", "cosh", "sin",
+    if identifier in ["abs", "acos", "asin", "atan", "conj", "cos", "cosh", "sin",
                       "sinh", "pow", "atan2", "tanh", "exp", "log", "log10",
                       "sqrt", "ceil", "floor", "max", "min", "fmax", "fmin",
                       "fabs", "tan", "erf", "erfc"]:
@@ -1041,6 +1075,14 @@ class CASTBuilder(ASTBuilderBase):
         return node
 
 
+class CComplexASTBuilder(CASTBuilder):
+    def get_expression_to_c_expression_mapper(self, codegen_state):
+        from loopy.target.c.codegen.expression import ExpressionToCExpressionMapper
+        return ExpressionToCExpressionMapper(
+                codegen_state, fortran_abi=self.target.fortran_abi,
+                use_c99_native_complex=True)
+
+
 # {{{ header generation
 
 class CFunctionDeclExtractor(CASTIdentityMapper):
@@ -1081,5 +1123,6 @@ def generate_header(kernel, codegen_result=None):
     return fde.decls
 
 # }}}
+
 
 # vim: foldmethod=marker
