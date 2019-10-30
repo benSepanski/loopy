@@ -290,11 +290,8 @@ __all__ = [
         "LoopyError", "LoopyWarning",
 
         "TargetBase",
-<<<<<<< HEAD
-        "CTarget", "CComplexTarget", "ExecutableCTarget", "generate_header",
-=======
-        "CFamilyTarget", "CTarget", "ExecutableCTarget", "generate_header",
->>>>>>> firedrake
+        "CFamilyTarget", "CTarget", "CComplexTarget", "ExecutableCTarget",
+        "generate_header",
         "CudaTarget", "OpenCLTarget",
         "PyOpenCLTarget", "NvidiaPyOpenCLTarget", "ISPCTarget",
         "NumbaTarget", "NumbaCudaTarget",
