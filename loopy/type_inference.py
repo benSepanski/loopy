@@ -478,7 +478,7 @@ class TypeInferenceMapper(CombineMapper):
             # storing the type specialized function so that it can be used for
             # later use
             self.callables_table, new_function_id = (
-                    self.callables_table.with_callable(
+                    self.callables_table.with_added_callable(
                         expr.function.function,
                         in_knl_callable))
 

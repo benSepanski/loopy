@@ -1042,7 +1042,7 @@ class CFamilyASTBuilder(ASTBuilderBase):
         return node
 
 
-class CComplexASTBuilder(CASTBuilder):
+class CComplexASTBuilder(CFamilyASTBuilder):
     def get_expression_to_c_expression_mapper(self, codegen_state):
         from loopy.target.c.codegen.expression import ExpressionToCExpressionMapper
         return ExpressionToCExpressionMapper(
